@@ -338,35 +338,36 @@ async function selecionarData(data) {
 async function _carregarHorariosOcupados(data) {
   _horariosOcupados = [];
   try {
+    var horasOcupadas = [];
+
     // Buscar sessões agendadas nessa data
     var resp = await fetch(SUPA_URL + '/rest/v1/sessoes?select=hora,status&data=eq.' + data + '&status=neq.cancelada', {
       headers: { 'apikey': SUPA_KEY, 'Authorization': 'Bearer ' + SUPA_KEY }
     });
     var sessoes = await resp.json();
     if (Array.isArray(sessoes)) {
-      sessoes.forEach(function(s) {
-        if (s.hora) {
-          // Bloquear o horário e o slot seguinte (30min depois)
-          _horariosOcupados.push(s.hora);
-          var prox = _addMinutos(s.hora, 30);
-          _horariosOcupados.push(prox);
-        }
-      });
+      sessoes.forEach(function(s) { if (s.hora) horasOcupadas.push(s.hora); });
     }
 
-    // Buscar solicitações pendentes/aprovadas nessa data
+    // Buscar solicitações pendentes nessa data
     var resp2 = await fetch(SUPA_URL + '/rest/v1/solicitacoes?select=hora_preferida,status&data_preferida=eq.' + data + '&status=eq.pendente', {
       headers: { 'apikey': SUPA_KEY, 'Authorization': 'Bearer ' + SUPA_KEY }
     });
     var sols = await resp2.json();
     if (Array.isArray(sols)) {
-      sols.forEach(function(s) {
-        if (s.hora_preferida) {
-          _horariosOcupados.push(s.hora_preferida);
-          _horariosOcupados.push(_addMinutos(s.hora_preferida, 30));
-        }
-      });
+      sols.forEach(function(s) { if (s.hora_preferida) horasOcupadas.push(s.hora_preferida); });
     }
+
+    // Para cada horário ocupado, bloquear:
+    // - o próprio horário
+    // - o slot SEGUINTE (+30min) → quem viesse depois ficaria sobreposto
+    // - o slot ANTERIOR (-30min) → quem viesse antes ficaria sobreposto
+    horasOcupadas.forEach(function(hora) {
+      _horariosOcupados.push(hora);
+      _horariosOcupados.push(_addMinutos(hora, 30));   // próximo slot
+      _horariosOcupados.push(_addMinutos(hora, -30));  // slot anterior
+    });
+
   } catch(e) {}
 }
 
