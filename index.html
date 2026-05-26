@@ -341,7 +341,7 @@ async function _carregarHorariosOcupados(data) {
     var horasOcupadas = [];
 
     // Buscar sessões agendadas nessa data
-    var resp = await fetch(SUPA_URL + '/rest/v1/sessoes?select=hora,status&data=eq.' + data + '&status=neq.cancelada', {
+    var resp = await fetch(SUPA_URL + '/rest/v1/sessoes?select=hora,status&data=eq.' + data + '&status=in.(pendente,presente,realizado)', {
       headers: { 'apikey': SUPA_KEY, 'Authorization': 'Bearer ' + SUPA_KEY }
     });
     var sessoes = await resp.json();
