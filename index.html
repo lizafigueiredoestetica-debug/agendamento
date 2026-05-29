@@ -197,7 +197,6 @@ var TEL_LIZA = '5521974743453';
 var _clienteLogado = null;
 var _dataSelecionada = null;
 var _horaSelecionada = null;
-var _horariosOcupados = [];
 var _calAno = new Date().getFullYear();
 var _calMes = new Date().getMonth();
 
@@ -323,58 +322,73 @@ function renderCalendario() {
 async function selecionarData(data) {
   _dataSelecionada = data;
   _horaSelecionada = null;
+  _conflitosData = [];
   renderCalendario();
 
   var wrap = document.getElementById('slotsWrap');
-  var cont = document.getElementById('slotsContainer');
   wrap.style.display = 'block';
-  cont.innerHTML = '<div class="slots-loading">⏳ Verificando horários disponíveis...</div>';
 
-  // Buscar horários ocupados nessa data
-  await _carregarHorariosOcupados(data);
+  // Pré-carregar conflitos da data para referência
+  await _carregarConflitosData(data);
   renderSlots(data);
 }
 
-async function _carregarHorariosOcupados(data) {
-  _horariosOcupados = [];
-  try {
-    var horasOcupadas = [];
+// Lista de intervalos ocupados na data selecionada
+var _conflitosData = [];
 
-    // Buscar sessões agendadas nessa data
-    var resp = await fetch(SUPA_URL + '/rest/v1/sessoes?select=hora,status&data=eq.' + data + '&status=in.(pendente,presente,realizado)', {
+async function _carregarConflitosData(data) {
+  _conflitosData = [];
+  try {
+    // Buscar sessões agendadas com hora e hora_fim
+    var resp = await fetch(SUPA_URL + '/rest/v1/sessoes?select=hora,hora_fim,status&data=eq.' + data + '&status=in.(pendente,presente,realizado)', {
       headers: { 'apikey': SUPA_KEY, 'Authorization': 'Bearer ' + SUPA_KEY }
     });
     var sessoes = await resp.json();
     if (Array.isArray(sessoes)) {
-      sessoes.forEach(function(s) { if (s.hora) horasOcupadas.push(s.hora); });
+      sessoes.forEach(function(s) {
+        if (s.hora) _conflitosData.push({ inicio: s.hora, fim: s.hora_fim || '' });
+      });
     }
 
-    // Buscar solicitações pendentes nessa data
-    var resp2 = await fetch(SUPA_URL + '/rest/v1/solicitacoes?select=hora_preferida,status&data_preferida=eq.' + data + '&status=eq.pendente', {
+    // Buscar solicitações pendentes
+    var resp2 = await fetch(SUPA_URL + '/rest/v1/solicitacoes?select=hora_preferida,hora_fim,status&data_preferida=eq.' + data + '&status=eq.pendente', {
       headers: { 'apikey': SUPA_KEY, 'Authorization': 'Bearer ' + SUPA_KEY }
     });
     var sols = await resp2.json();
     if (Array.isArray(sols)) {
-      sols.forEach(function(s) { if (s.hora_preferida) horasOcupadas.push(s.hora_preferida); });
+      sols.forEach(function(s) {
+        if (s.hora_preferida) _conflitosData.push({ inicio: s.hora_preferida, fim: s.hora_fim || '' });
+      });
     }
-
-    // Para cada horário ocupado, bloquear:
-    // - o próprio horário
-    // - o slot SEGUINTE (+30min) → quem viesse depois ficaria sobreposto
-    // - o slot ANTERIOR (-30min) → quem viesse antes ficaria sobreposto
-    horasOcupadas.forEach(function(hora) {
-      _horariosOcupados.push(hora);
-      _horariosOcupados.push(_addMinutos(hora, 30));   // próximo slot
-      _horariosOcupados.push(_addMinutos(hora, -30));  // slot anterior
-    });
-
   } catch(e) {}
 }
 
 function _addMinutos(hora, min) {
   var p = hora.split(':');
   var total = parseInt(p[0])*60 + parseInt(p[1]) + min;
+  if (total < 0) return '00:00';
   return String(Math.floor(total/60)).padStart(2,'0') + ':' + String(total%60).padStart(2,'0');
+}
+
+function _toMin(hora) {
+  var p = hora.split(':');
+  return parseInt(p[0])*60 + parseInt(p[1]);
+}
+
+// Verificar se um horário (inicio, +1h) conflita com algum agendamento existente
+function _verificarConflito(hora) {
+  var hIni = _toMin(hora);
+  var hFim = hIni + 60; // duração mínima 1h
+  for (var i = 0; i < _conflitosData.length; i++) {
+    var c = _conflitosData[i];
+    var cIni = _toMin(c.inicio);
+    var cFim = c.fim ? _toMin(c.fim) : cIni + 60;
+    // Sobreposição: novo início < fim existente E novo fim > início existente
+    if (hIni < cFim && hFim > cIni) {
+      return { conflito: true, inicio: c.inicio, fim: c.fim || _addMinutos(c.inicio, 60) };
+    }
+  }
+  return { conflito: false };
 }
 
 function _gerarSlots() {
@@ -394,38 +408,60 @@ function renderSlots(data) {
   var hojeStr = _hoje();
 
   var html = '<div class="slots-grid">';
-  var algumDisponivel = false;
 
   slots.forEach(function(slot) {
-    var ocupado = _horariosOcupados.indexOf(slot) >= 0;
-
-    // Se for hoje, bloquear horários já passados
+    // Bloquear apenas horários passados (hoje)
+    var passado = false;
     if (data === hojeStr) {
-      var p = slot.split(':');
-      var slotMin = parseInt(p[0])*60 + parseInt(p[1]);
+      var slotMin = _toMin(slot);
       var agoraMin = agora.getHours()*60 + agora.getMinutes();
-      if (slotMin <= agoraMin + 60) ocupado = true; // +60 de margem
+      if (slotMin <= agoraMin + 60) passado = true;
     }
 
-    if (!ocupado) algumDisponivel = true;
-
-    var cls = 'slot' + (ocupado ? ' ocupado' : '') + (slot === _horaSelecionada ? ' selecionado' : '');
-    var onclick = ocupado ? '' : 'onclick="selecionarHora(\''+slot+'\')"';
+    var cls = 'slot' + (passado ? ' ocupado' : '') + (slot === _horaSelecionada ? ' selecionado' : '');
+    var onclick = passado ? '' : 'onclick="selecionarHora(\''+slot+'\')"';
     html += '<div class="'+cls+'" '+onclick+'>'+slot+'</div>';
   });
 
   html += '</div>';
+  cont.innerHTML = html;
 
-  if (!algumDisponivel) {
-    cont.innerHTML = '<div class="slots-vazio">😔 Nenhum horário disponível nesta data.<br>Escolha outro dia.</div>';
-  } else {
-    cont.innerHTML = html;
-  }
+  // Limpar aviso de conflito anterior
+  var avisoEl = document.getElementById('aviso-conflito');
+  if (avisoEl) avisoEl.remove();
 }
 
-function selecionarHora(hora) {
+async function selecionarHora(hora) {
   _horaSelecionada = hora;
   renderSlots(_dataSelecionada);
+
+  // Limpar aviso anterior
+  var avisoAnterior = document.getElementById('aviso-conflito');
+  if (avisoAnterior) avisoAnterior.remove();
+
+  // Consulta em tempo real na base
+  await _carregarConflitosData(_dataSelecionada);
+  var resultado = _verificarConflito(hora);
+
+  if (resultado.conflito) {
+    // Mostrar aviso elegante
+    var aviso = document.createElement('div');
+    aviso.id = 'aviso-conflito';
+    aviso.style.cssText = 'margin-top:12px;background:#FFF0F0;border:1.5px solid #FFCDD2;border-radius:10px;padding:12px 16px;font-size:13px;color:#C62828;display:flex;align-items:flex-start;gap:10px';
+    aviso.innerHTML = '<span style="font-size:18px;flex-shrink:0">⚠️</span>'
+      + '<div>'
+      + '<div style="font-weight:600;margin-bottom:2px">Horário já agendado</div>'
+      + '<div>Das <strong>' + resultado.inicio + '</strong> às <strong>' + resultado.fim + '</strong> já existe um agendamento.</div>'
+      + '<div style="margin-top:4px;color:#888">Por favor, escolha outro horário disponível.</div>'
+      + '</div>';
+
+    var slotsWrap = document.getElementById('slotsWrap');
+    slotsWrap.appendChild(aviso);
+
+    // Impedir envio — desmarcar hora
+    _horaSelecionada = null;
+    renderSlots(_dataSelecionada);
+  }
 }
 
 // ── Enviar agendamento ──
@@ -442,21 +478,12 @@ async function enviarAgendamento() {
   var nome = _clienteLogado.nome || 'Cliente';
   var tel = (_clienteLogado.telefone || '').replace(/\D/g,'');
 
-  // Calcular hora fim automática: hora selecionada + 1 hora
-  var _horaFimAuto = '';
-  if (_horaSelecionada) {
-    var _partes = _horaSelecionada.split(':');
-    var _totalMin = parseInt(_partes[0])*60 + parseInt(_partes[1]) + 60;
-    _horaFimAuto = String(Math.floor(_totalMin/60)).padStart(2,'0') + ':' + String(_totalMin%60).padStart(2,'0');
-  }
-
   var solicitacao = {
     id: uid(),
     nome: nome,
     telefone: tel,
     data_preferida: _dataSelecionada,
     hora_preferida: _horaSelecionada,
-    hora_fim: _horaFimAuto,
     observacao: obs,
     status: 'pendente',
     criado_em: new Date().toISOString(),
