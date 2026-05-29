@@ -68,16 +68,54 @@ body { font-family:'Segoe UI',Arial,sans-serif; background:#FDF7F9; color:#2C1A2
 .cal-day.disabled { opacity:0.3; cursor:not-allowed; background:#f5f5f5; }
 .cal-day.outro-mes { opacity:0.2; cursor:not-allowed; }
 
-/* SLOTS DE HORÁRIO */
-.slots-titulo { font-size:11px; font-weight:600; color:#6B3550; letter-spacing:1px; text-transform:uppercase; margin-bottom:8px; }
-.slots-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:6px; }
-@media(max-width:360px){ .slots-grid{ grid-template-columns:repeat(3,1fr); } }
-.slot { padding:8px 4px; border:1.5px solid #F0D8E0; border-radius:8px; text-align:center; font-size:13px; font-weight:500; cursor:pointer; transition:all 0.15s; background:white; color:#2C1A22; }
-.slot:hover:not(.ocupado) { border-color:#C4708A; background:#FFF8FA; }
-.slot.selecionado { background:linear-gradient(135deg,#C4708A,#9E4A65); color:white; border-color:#9E4A65; font-weight:600; }
-.slot.ocupado { background:#f5f5f5; color:#ccc; cursor:not-allowed; border-color:#eee; text-decoration:line-through; }
-.slots-loading { text-align:center; padding:1rem; color:#aaa; font-size:13px; }
-.slots-vazio { text-align:center; padding:1rem; color:#C4708A; font-size:13px; }
+/* CAMPOS DE HORÁRIO */
+.hora-wrap { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.hora-grupo { display:flex; flex-direction:column; gap:6px; }
+.hora-grupo label { font-size:11px; font-weight:600; color:#6B3550; letter-spacing:1px; text-transform:uppercase; }
+.hora-input {
+  padding:12px 14px;
+  border:1.5px solid #F0D8E0;
+  border-radius:10px;
+  font-size:16px;
+  font-weight:500;
+  color:#2C1A22;
+  background:white;
+  width:100%;
+  box-sizing:border-box;
+  outline:none;
+  transition:border-color 0.2s, box-shadow 0.2s;
+  font-family:inherit;
+}
+.hora-input:focus { border-color:#C4708A; box-shadow:0 0 0 3px rgba(196,112,138,0.12); }
+.hora-input.livre { border-color:#4CAF50; box-shadow:0 0 0 3px rgba(76,175,80,0.12); }
+.hora-input.conflito { border-color:#E53935; box-shadow:0 0 0 3px rgba(229,57,53,0.12); }
+.hora-aviso {
+  margin-top:10px;
+  background:#FFF3F3;
+  border:1.5px solid #FFCDD2;
+  border-radius:10px;
+  padding:12px 14px;
+  font-size:13px;
+  color:#C62828;
+  display:flex;
+  align-items:flex-start;
+  gap:10px;
+  animation:fadeIn 0.2s ease;
+}
+.hora-aviso-ok {
+  margin-top:10px;
+  background:#F1F8E9;
+  border:1.5px solid #C5E1A5;
+  border-radius:10px;
+  padding:10px 14px;
+  font-size:13px;
+  color:#2E7D32;
+  display:flex;
+  align-items:center;
+  gap:8px;
+  animation:fadeIn 0.2s ease;
+}
+@keyframes fadeIn { from{opacity:0;transform:translateY(-4px)} to{opacity:1;transform:translateY(0)} }
 
 /* BOTÕES */
 .btn-enviar { width:100%; padding:1rem; background:linear-gradient(135deg,#C4708A,#9E4A65); color:white; border:none; border-radius:10px; font-size:15px; font-weight:600; cursor:pointer; font-family:inherit; transition:opacity 0.2s; }
@@ -162,8 +200,18 @@ body { font-family:'Segoe UI',Arial,sans-serif; background:#FDF7F9; color:#2C1A2
 
       <!-- Horários -->
       <div class="form-group" id="slotsWrap" style="display:none">
-        <label>Selecione o horário <span class="campo-req">*</span></label>
-        <div id="slotsContainer"></div>
+        <label>Informe o horário desejado <span class="campo-req">*</span></label>
+        <div class="hora-wrap">
+          <div class="hora-grupo">
+            <label for="horaInicio">Hora início</label>
+            <input type="time" id="horaInicio" class="hora-input" onchange="verificarHorario()" oninput="verificarHorario()">
+          </div>
+          <div class="hora-grupo">
+            <label for="horaFim">Hora fim</label>
+            <input type="time" id="horaFim" class="hora-input" onchange="verificarHorario()" oninput="verificarHorario()">
+          </div>
+        </div>
+        <div id="horaAvisoWrap"></div>
       </div>
 
       <!-- Observação -->
@@ -319,48 +367,13 @@ function renderCalendario() {
   grid.innerHTML = html;
 }
 
-async function selecionarData(data) {
-  _dataSelecionada = data;
-  _horaSelecionada = null;
-  _conflitosData = [];
-  renderCalendario();
-
-  var wrap = document.getElementById('slotsWrap');
-  wrap.style.display = 'block';
-
-  // Pré-carregar conflitos da data para referência
-  await _carregarConflitosData(data);
-  renderSlots(data);
-}
-
-// Lista de intervalos ocupados na data selecionada
+// ── Lógica de horário livre ──
 var _conflitosData = [];
+var _horarioValido = false;
 
-async function _carregarConflitosData(data) {
-  _conflitosData = [];
-  try {
-    // Buscar sessões agendadas com hora e hora_fim
-    var resp = await fetch(SUPA_URL + '/rest/v1/sessoes?select=hora,hora_fim,status&data=eq.' + data + '&status=in.(pendente,presente,realizado)', {
-      headers: { 'apikey': SUPA_KEY, 'Authorization': 'Bearer ' + SUPA_KEY }
-    });
-    var sessoes = await resp.json();
-    if (Array.isArray(sessoes)) {
-      sessoes.forEach(function(s) {
-        if (s.hora) _conflitosData.push({ inicio: s.hora, fim: s.hora_fim || '' });
-      });
-    }
-
-    // Buscar solicitações pendentes
-    var resp2 = await fetch(SUPA_URL + '/rest/v1/solicitacoes?select=hora_preferida,hora_fim,status&data_preferida=eq.' + data + '&status=eq.pendente', {
-      headers: { 'apikey': SUPA_KEY, 'Authorization': 'Bearer ' + SUPA_KEY }
-    });
-    var sols = await resp2.json();
-    if (Array.isArray(sols)) {
-      sols.forEach(function(s) {
-        if (s.hora_preferida) _conflitosData.push({ inicio: s.hora_preferida, fim: s.hora_fim || '' });
-      });
-    }
-  } catch(e) {}
+function _toMin(hora) {
+  var p = hora.split(':');
+  return parseInt(p[0])*60 + parseInt(p[1]);
 }
 
 function _addMinutos(hora, min) {
@@ -370,104 +383,121 @@ function _addMinutos(hora, min) {
   return String(Math.floor(total/60)).padStart(2,'0') + ':' + String(total%60).padStart(2,'0');
 }
 
-function _toMin(hora) {
-  var p = hora.split(':');
-  return parseInt(p[0])*60 + parseInt(p[1]);
+async function selecionarData(data) {
+  _dataSelecionada = data;
+  _horaSelecionada = null;
+  _horarioValido = false;
+  renderCalendario();
+
+  // Mostrar campos de hora e limpar
+  var wrap = document.getElementById('slotsWrap');
+  wrap.style.display = 'block';
+  var ini = document.getElementById('horaInicio');
+  var fim = document.getElementById('horaFim');
+  if (ini) { ini.value = ''; ini.className = 'hora-input'; }
+  if (fim) { fim.value = ''; fim.className = 'hora-input'; }
+  document.getElementById('horaAvisoWrap').innerHTML = '';
+
+  // Pré-carregar conflitos da data
+  await _carregarConflitosData(data);
 }
 
-// Verificar se um horário (inicio, +1h) conflita com algum agendamento existente
-function _verificarConflito(hora) {
-  var hIni = _toMin(hora);
-  var hFim = hIni + 60; // duração mínima 1h
+async function _carregarConflitosData(data) {
+  _conflitosData = [];
+  try {
+    var resp = await fetch(SUPA_URL + '/rest/v1/sessoes?select=hora,hora_fim,status&data=eq.' + data + '&status=in.(pendente,presente,realizado)', {
+      headers: { 'apikey': SUPA_KEY, 'Authorization': 'Bearer ' + SUPA_KEY }
+    });
+    var sessoes = await resp.json();
+    if (Array.isArray(sessoes)) {
+      sessoes.forEach(function(s) {
+        if (s.hora) _conflitosData.push({ inicio: s.hora, fim: s.hora_fim || _addMinutos(s.hora, 60) });
+      });
+    }
+    var resp2 = await fetch(SUPA_URL + '/rest/v1/solicitacoes?select=hora_preferida,hora_fim,status&data_preferida=eq.' + data + '&status=eq.pendente', {
+      headers: { 'apikey': SUPA_KEY, 'Authorization': 'Bearer ' + SUPA_KEY }
+    });
+    var sols = await resp2.json();
+    if (Array.isArray(sols)) {
+      sols.forEach(function(s) {
+        if (s.hora_preferida) _conflitosData.push({ inicio: s.hora_preferida, fim: s.hora_fim || _addMinutos(s.hora_preferida, 60) });
+      });
+    }
+  } catch(e) {}
+}
+
+async function verificarHorario() {
+  var ini = document.getElementById('horaInicio');
+  var fim = document.getElementById('horaFim');
+  var avisoWrap = document.getElementById('horaAvisoWrap');
+  if (!ini || !fim || !avisoWrap) return;
+
+  var hIni = ini.value;
+  var hFim = fim.value;
+
+  // Resetar estado
+  ini.className = 'hora-input';
+  fim.className = 'hora-input';
+  avisoWrap.innerHTML = '';
+  _horarioValido = false;
+  _horaSelecionada = null;
+
+  if (!hIni || !hFim) return;
+
+  var minIni = _toMin(hIni);
+  var minFim = _toMin(hFim);
+
+  // Validar: fim deve ser depois do início
+  if (minFim <= minIni) {
+    avisoWrap.innerHTML = '<div class="hora-aviso"><span style="font-size:18px;flex-shrink:0">⚠️</span><div><strong>Horário inválido</strong><br>A hora fim deve ser depois da hora início.</div></div>';
+    ini.className = 'hora-input conflito';
+    fim.className = 'hora-input conflito';
+    return;
+  }
+
+  // Recarregar conflitos em tempo real
+  await _carregarConflitosData(_dataSelecionada);
+
+  // Verificar conflito
+  var conflito = null;
   for (var i = 0; i < _conflitosData.length; i++) {
     var c = _conflitosData[i];
     var cIni = _toMin(c.inicio);
-    var cFim = c.fim ? _toMin(c.fim) : cIni + 60;
-    // Sobreposição: novo início < fim existente E novo fim > início existente
-    if (hIni < cFim && hFim > cIni) {
-      return { conflito: true, inicio: c.inicio, fim: c.fim || _addMinutos(c.inicio, 60) };
+    var cFim = _toMin(c.fim);
+    if (minIni < cFim && minFim > cIni) {
+      conflito = c;
+      break;
     }
   }
-  return { conflito: false };
-}
 
-function _gerarSlots() {
-  var slots = [];
-  var inicio = 8 * 60; // 8:00
-  var fim = 20 * 60;   // 20:00
-  for (var m = inicio; m < fim; m += 30) {
-    slots.push(String(Math.floor(m/60)).padStart(2,'0') + ':' + String(m%60).padStart(2,'0'));
-  }
-  return slots;
-}
-
-function renderSlots(data) {
-  var cont = document.getElementById('slotsContainer');
-  var slots = _gerarSlots();
-  var agora = new Date();
-  var hojeStr = _hoje();
-
-  var html = '<div class="slots-grid">';
-
-  slots.forEach(function(slot) {
-    // Bloquear apenas horários passados (hoje)
-    var passado = false;
-    if (data === hojeStr) {
-      var slotMin = _toMin(slot);
-      var agoraMin = agora.getHours()*60 + agora.getMinutes();
-      if (slotMin <= agoraMin + 60) passado = true;
-    }
-
-    var cls = 'slot' + (passado ? ' ocupado' : '') + (slot === _horaSelecionada ? ' selecionado' : '');
-    var onclick = passado ? '' : 'onclick="selecionarHora(\''+slot+'\')"';
-    html += '<div class="'+cls+'" '+onclick+'>'+slot+'</div>';
-  });
-
-  html += '</div>';
-  cont.innerHTML = html;
-
-  // Limpar aviso de conflito anterior
-  var avisoEl = document.getElementById('aviso-conflito');
-  if (avisoEl) avisoEl.remove();
-}
-
-async function selecionarHora(hora) {
-  _horaSelecionada = hora;
-  renderSlots(_dataSelecionada);
-
-  // Limpar aviso anterior
-  var avisoAnterior = document.getElementById('aviso-conflito');
-  if (avisoAnterior) avisoAnterior.remove();
-
-  // Consulta em tempo real na base
-  await _carregarConflitosData(_dataSelecionada);
-  var resultado = _verificarConflito(hora);
-
-  if (resultado.conflito) {
-    // Mostrar aviso elegante
-    var aviso = document.createElement('div');
-    aviso.id = 'aviso-conflito';
-    aviso.style.cssText = 'margin-top:12px;background:#FFF0F0;border:1.5px solid #FFCDD2;border-radius:10px;padding:12px 16px;font-size:13px;color:#C62828;display:flex;align-items:flex-start;gap:10px';
-    aviso.innerHTML = '<span style="font-size:18px;flex-shrink:0">⚠️</span>'
+  if (conflito) {
+    ini.className = 'hora-input conflito';
+    fim.className = 'hora-input conflito';
+    avisoWrap.innerHTML = '<div class="hora-aviso">'
+      + '<span style="font-size:20px;flex-shrink:0">⚠️</span>'
       + '<div>'
-      + '<div style="font-weight:600;margin-bottom:2px">Horário já agendado</div>'
-      + '<div>Das <strong>' + resultado.inicio + '</strong> às <strong>' + resultado.fim + '</strong> já existe um agendamento.</div>'
-      + '<div style="margin-top:4px;color:#888">Por favor, escolha outro horário disponível.</div>'
-      + '</div>';
-
-    var slotsWrap = document.getElementById('slotsWrap');
-    slotsWrap.appendChild(aviso);
-
-    // Impedir envio — desmarcar hora
-    _horaSelecionada = null;
-    renderSlots(_dataSelecionada);
+      + '<div style="font-weight:700;margin-bottom:4px">Liza já está agendada neste horário</div>'
+      + '<div>Das <strong>' + conflito.inicio + '</strong> às <strong>' + conflito.fim + '</strong> já existe um compromisso.</div>'
+      + '<div style="margin-top:6px;color:#B71C1C">Por favor, escolha um horário diferente.</div>'
+      + '</div></div>';
+  } else {
+    ini.className = 'hora-input livre';
+    fim.className = 'hora-input livre';
+    _horarioValido = true;
+    _horaSelecionada = hIni;
+    avisoWrap.innerHTML = '<div class="hora-aviso-ok"><span style="font-size:18px">✅</span><div><strong>Horário disponível!</strong> Clique em Confirmar para solicitar.</div></div>';
   }
 }
 
 // ── Enviar agendamento ──
 async function enviarAgendamento() {
   if (!_dataSelecionada) { showToast('⚠️ Selecione uma data!'); return; }
-  if (!_horaSelecionada) { showToast('⚠️ Selecione um horário!'); return; }
+  if (!_horaSelecionada || !_horarioValido) {
+    var hi = (document.getElementById('horaInicio')||{value:''}).value;
+    var hf = (document.getElementById('horaFim')||{value:''}).value;
+    if (!hi || !hf) { showToast('⚠️ Informe o horário desejado!'); return; }
+    if (!_horarioValido) { showToast('⚠️ O horário informado não está disponível!'); return; }
+  }
   var obs = document.getElementById('observacao').value.trim();
   if (!obs) { showToast('⚠️ Descreva o que deseja realizar!'); return; }
 
@@ -484,6 +514,7 @@ async function enviarAgendamento() {
     telefone: tel,
     data_preferida: _dataSelecionada,
     hora_preferida: _horaSelecionada,
+    hora_fim: (document.getElementById('horaFim')||{value:''}).value || '',
     observacao: obs,
     status: 'pendente',
     criado_em: new Date().toISOString(),
