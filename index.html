@@ -338,40 +338,15 @@ async function selecionarData(data) {
 async function _carregarHorariosOcupados(data) {
   _horariosOcupados = [];
   try {
-    // Buscar sessões agendadas nessa data — inclui hora_fim
-    var resp = await fetch(SUPA_URL + '/rest/v1/sessoes?select=hora,hora_fim,status&data=eq.' + data + '&status=in.(pendente,presente,realizado)', {
+    var horasOcupadas = [];
+
+    // Buscar sessões agendadas nessa data
+    var resp = await fetch(SUPA_URL + '/rest/v1/sessoes?select=hora,status&data=eq.' + data + '&status=in.(pendente,presente,realizado)', {
       headers: { 'apikey': SUPA_KEY, 'Authorization': 'Bearer ' + SUPA_KEY }
     });
     var sessoes = await resp.json();
-
     if (Array.isArray(sessoes)) {
-      sessoes.forEach(function(s) {
-        if (!s.hora) return;
-
-        if (s.hora_fim && s.hora_fim !== '') {
-          // Com hora_fim: bloquear todos os slots de 30 em 30 dentro do intervalo
-          // + slot anterior (para não iniciar durante um atendimento)
-          var hIni = parseInt(s.hora.split(':')[0])*60 + parseInt(s.hora.split(':')[1]||0);
-          var hFim = parseInt(s.hora_fim.split(':')[0])*60 + parseInt(s.hora_fim.split(':')[1]||0);
-
-          // Bloquear slot anterior ao início
-          _horariosOcupados.push(_addMinutos(s.hora, -30));
-
-          // Bloquear todos os slots dentro do intervalo
-          for (var m = hIni; m < hFim; m += 30) {
-            var hStr = String(Math.floor(m/60)).padStart(2,'0') + ':' + String(m%60).padStart(2,'0');
-            _horariosOcupados.push(hStr);
-          }
-          // Bloquear o slot do horário de fim também
-          _horariosOcupados.push(s.hora_fim);
-
-        } else {
-          // Sem hora_fim: comportamento original — bloqueia ±30min
-          _horariosOcupados.push(s.hora);
-          _horariosOcupados.push(_addMinutos(s.hora, 30));
-          _horariosOcupados.push(_addMinutos(s.hora, -30));
-        }
-      });
+      sessoes.forEach(function(s) { if (s.hora) horasOcupadas.push(s.hora); });
     }
 
     // Buscar solicitações pendentes nessa data
@@ -380,18 +355,17 @@ async function _carregarHorariosOcupados(data) {
     });
     var sols = await resp2.json();
     if (Array.isArray(sols)) {
-      sols.forEach(function(s) {
-        if (s.hora_preferida) {
-          _horariosOcupados.push(s.hora_preferida);
-          _horariosOcupados.push(_addMinutos(s.hora_preferida, 30));
-          _horariosOcupados.push(_addMinutos(s.hora_preferida, -30));
-        }
-      });
+      sols.forEach(function(s) { if (s.hora_preferida) horasOcupadas.push(s.hora_preferida); });
     }
 
-    // Remover duplicatas
-    _horariosOcupados = _horariosOcupados.filter(function(v, i, a) {
-      return v && a.indexOf(v) === i;
+    // Para cada horário ocupado, bloquear:
+    // - o próprio horário
+    // - o slot SEGUINTE (+30min) → quem viesse depois ficaria sobreposto
+    // - o slot ANTERIOR (-30min) → quem viesse antes ficaria sobreposto
+    horasOcupadas.forEach(function(hora) {
+      _horariosOcupados.push(hora);
+      _horariosOcupados.push(_addMinutos(hora, 30));   // próximo slot
+      _horariosOcupados.push(_addMinutos(hora, -30));  // slot anterior
     });
 
   } catch(e) {}
@@ -468,12 +442,21 @@ async function enviarAgendamento() {
   var nome = _clienteLogado.nome || 'Cliente';
   var tel = (_clienteLogado.telefone || '').replace(/\D/g,'');
 
+  // Calcular hora fim automática: hora selecionada + 1 hora
+  var _horaFimAuto = '';
+  if (_horaSelecionada) {
+    var _partes = _horaSelecionada.split(':');
+    var _totalMin = parseInt(_partes[0])*60 + parseInt(_partes[1]) + 60;
+    _horaFimAuto = String(Math.floor(_totalMin/60)).padStart(2,'0') + ':' + String(_totalMin%60).padStart(2,'0');
+  }
+
   var solicitacao = {
     id: uid(),
     nome: nome,
     telefone: tel,
     data_preferida: _dataSelecionada,
     hora_preferida: _horaSelecionada,
+    hora_fim: _horaFimAuto,
     observacao: obs,
     status: 'pendente',
     criado_em: new Date().toISOString(),
