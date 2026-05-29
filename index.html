@@ -211,6 +211,9 @@ body { font-family:'Segoe UI',Arial,sans-serif; background:#FDF7F9; color:#2C1A2
             <input type="time" id="horaFim" class="hora-input" onchange="verificarHorario()" oninput="verificarHorario()">
           </div>
         </div>
+        <div style="margin-top:10px">
+          <button type="button" onclick="limparHorario()" style="background:none;border:1.5px solid #F0D8E0;border-radius:8px;padding:6px 16px;font-size:12px;color:#9E4A65;cursor:pointer;font-family:inherit;transition:all 0.15s" onmouseover="this.style.background='#FFF8FA'" onmouseout="this.style.background='none'">✕ Limpar horário</button>
+        </div>
         <div id="horaAvisoWrap"></div>
       </div>
 
@@ -424,6 +427,16 @@ async function _carregarConflitosData(data) {
       });
     }
   } catch(e) {}
+}
+
+function limparHorario() {
+  var ini = document.getElementById('horaInicio');
+  var fim = document.getElementById('horaFim');
+  if (ini) { ini.value = ''; ini.className = 'hora-input'; }
+  if (fim) { fim.value = ''; fim.className = 'hora-input'; }
+  document.getElementById('horaAvisoWrap').innerHTML = '';
+  _horarioValido = false;
+  _horaSelecionada = null;
 }
 
 async function verificarHorario() {
